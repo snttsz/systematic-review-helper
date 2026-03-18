@@ -33,6 +33,8 @@ Variáveis:
 
 ## Estrutura de pastas
 
+Obs: Só se preocupe com o que você precisa preencher, o resto é gerenciado pelo sistema.
+
 - data/questions.json: lista de perguntas (array de strings). ***PRECISA PREENCHER***
 - data/results.json: respostas consolidadas.
 - data/memory/sessions_ids.json: estado por artigo (notebook, upload, processamento).
@@ -41,6 +43,7 @@ Variáveis:
 - papers/: artigos (.pdf) que serão processados. ***PRECISA PREENCHER***
 
 ## Arquivos de exemplo
+
 Este repositório inclui alguns papers em papers/ e arquivos em data/ apenas para demonstrar o uso. Substitua pelos seus próprios arquivos antes de rodar em produção.
 
 ## Fluxo geral
