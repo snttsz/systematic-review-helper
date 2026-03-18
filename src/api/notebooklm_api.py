@@ -250,7 +250,7 @@ class NotebookLMAPI:
 
         return response.text
 
-    def wait_for_processing(self, notebook_id, max_retries=100, delay=20):
+    def wait_for_processing(self, notebook_id, max_retries=100, delay=10):
 
         for _ in range(max_retries):
             try:
