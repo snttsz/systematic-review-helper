@@ -37,7 +37,7 @@ Variáveis:
 
 Obs: Só se preocupe com o que você precisa preencher, o resto é gerenciado pelo sistema.
 
-- data/questions.json: lista de perguntas (array de strings). ***PRECISA PREENCHER***
+- data/questions.json: lista de perguntas (array de strings). ***PRECISA PREENCHER. O sistema não guarda histórico da conversa, então cada pergunta é como se houvesse apenas essa pergunta no chat. Caso você precise de histórico, sinta-se livre para contribuir com o projeto 🙂***
 - data/results.json: respostas consolidadas.
 - data/memory/sessions_ids.json: estado por artigo (notebook, upload, processamento).
 - data/memory/chrome_profile.json: estado do perfil gerenciado (login, flags).
