@@ -11,6 +11,9 @@ from urllib.parse import urlparse, parse_qs
 
 load_dotenv()
 
+class AuthError(Exception):
+    pass
+
 class NotebookLMAPI:
 
     def __init__(self):
@@ -34,6 +37,9 @@ class NotebookLMAPI:
 
         response = self.client.get(self.host)
 
+        if self._is_unauthorized(response):
+            return False
+
         match = re.search(r'"SNlM0e":"(.*?)"', response.text)
         action_token = match.group(1) if match else None
 
@@ -52,6 +58,7 @@ class NotebookLMAPI:
             return False
 
         response = self.client.get(f"{self.host}/notebook/{notebook_id}")
+        self._raise_if_unauthorized(response)
         return response.status_code == 200
     
     def create_notebook(self):
@@ -74,6 +81,7 @@ class NotebookLMAPI:
         }
 
         response = self.client.post(self.host + path, params=params, data=data)
+        self._raise_if_unauthorized(response)
 
         ids = re.findall(r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}', response.text)
 
@@ -105,6 +113,7 @@ class NotebookLMAPI:
         }
 
         response = self.client.post(self.host + path, params=params, data=data)
+        self._raise_if_unauthorized(response)
 
         ids = re.findall(r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}', response.text)
         source_id = list(set(ids))[0]
@@ -159,6 +168,8 @@ class NotebookLMAPI:
                 else:
                     self.client.headers[key] = original_value
 
+        self._raise_if_unauthorized(response)
+
         upload_url = response.headers.get("X-Goog-Upload-Url")
 
         if not upload_url:
@@ -211,6 +222,8 @@ class NotebookLMAPI:
                 else:
                     self.client.headers[key] = original_value
 
+        self._raise_if_unauthorized(response)
+
     def check_answer_status(self, notebook_id):
 
         path = "/_/LabsTailwindUi/data/batchexecute"
@@ -233,6 +246,7 @@ class NotebookLMAPI:
         }
 
         response = self.client.post(self.host + path, params=params, data=data)
+        self._raise_if_unauthorized(response)
 
         return response.text
 
@@ -293,6 +307,7 @@ class NotebookLMAPI:
         }
 
         response = self.client.post(self.host + path, params=params, data=data, timeout=120)
+        self._raise_if_unauthorized(response)
         final_answer = self._extract_final_answer(response.text)
 
         return final_answer
@@ -369,5 +384,22 @@ class NotebookLMAPI:
     
     def _get_google_reqid(self):
         return str(int(time.time() * 1000) % 1000000)
+
+    def _is_unauthorized(self, response: httpx.Response) -> bool:
+        if response.status_code in (401, 403):
+            return True
+        if "accounts.google.com" in str(response.url):
+            return True
+
+        if response.status_code in (301, 302, 303, 307, 308):
+            location = response.headers.get("location", "")
+            if "accounts.google.com" in location:
+                return True
+
+        return False
+
+    def _raise_if_unauthorized(self, response: httpx.Response) -> None:
+        if self._is_unauthorized(response):
+            raise AuthError("Authentication expired.")
     
 

@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 
 from src.utils.refresh_notebooklm_cookies import refresh_cookies
-from src.api.notebooklm_api import NotebookLMAPI
+from src.api.notebooklm_api import AuthError, NotebookLMAPI
 from src.utils.helpers import (
     list_papers,
     load_questions,
@@ -76,10 +76,35 @@ class NotebookLMWorkflow:
         results: dict,
         sessions: dict,
     ) -> None:
-        notebook_api = self._ensure_login()
-        if not notebook_api:
-            return
+        for attempt in range(2):
+            notebook_api = self._ensure_login()
+            if not notebook_api:
+                return
 
+            try:
+                self._process_paper_with_api(
+                    notebook_api,
+                    paper_path,
+                    questions,
+                    results,
+                    sessions,
+                )
+                return
+            except AuthError:
+                if attempt == 0:
+                    print("Authentication expired. Retrying article...")
+                    continue
+                print("Authentication failed after retry. Skipping article.")
+                return
+
+    def _process_paper_with_api(
+        self,
+        notebook_api: NotebookLMAPI,
+        paper_path: Path,
+        questions: list[str],
+        results: dict,
+        sessions: dict,
+    ) -> None:
         paper_name = paper_path.name
         with self._sessions_lock:
             session = sessions.setdefault(paper_name, {})
