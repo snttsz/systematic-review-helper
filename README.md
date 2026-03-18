@@ -10,6 +10,8 @@ Automatizar a etapa de extração de dados em revisão sistemática usando uma A
 - Google Chrome
 - chromedriver na raiz do projeto (ou `CHROMEDRIVER_PATH` definido). Baixe a versao compativel com seu Chrome: https://developer.chrome.com/docs/chromedriver/downloads/version-selection?hl=pt-br
 
+O Chrome e o chromedriver sao usados exclusivamente para gerenciar a sessao da conta Google (captura/refresh de cookies). Se voce tiver outra forma de obter e manter os cookies, pode usar apenas a API preenchendo `COOKIES` no `.env`.
+
 Exemplo para verificar a versao do Chrome no Windows:
 
 ```powershell
