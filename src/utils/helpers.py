@@ -28,6 +28,14 @@ def save_results(path: Path, results: dict) -> None:
 		json.dump(results, file, indent=2, ensure_ascii=False)
 
 
+def is_blank_answer(value: object) -> bool:
+	if value is None:
+		return True
+	if isinstance(value, str):
+		return not value.strip()
+	return False
+
+
 def list_papers(papers_dir: Path) -> list[Path]:
 	if not papers_dir.exists():
 		return []

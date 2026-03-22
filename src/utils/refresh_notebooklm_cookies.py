@@ -361,8 +361,10 @@ def save_profile_config(
 def resolve_profile_settings(
     profile_override: str | None,
     user_data_dir_override: str | None,
-) -> tuple[str, str, bool | None, bool]:
-    config = load_profile_config(PROFILE_CONFIG_PATH)
+    profile_config_path: Path | None = None,
+) -> tuple[str, str, bool | None, bool, dict]:
+    config_path = profile_config_path or PROFILE_CONFIG_PATH
+    config = load_profile_config(config_path)
 
     profile_name = (
         (profile_override or "").strip()
@@ -381,9 +383,9 @@ def resolve_profile_settings(
 
     first_time = not config.get("profile_name") or not config.get("user_data_dir")
     if first_time:
-        save_profile_config(PROFILE_CONFIG_PATH, profile_name, user_data_dir)
+        save_profile_config(config_path, profile_name, user_data_dir)
 
-    return profile_name, user_data_dir, config.get("headless_ok"), first_time
+    return profile_name, user_data_dir, config.get("headless_ok"), first_time, config
 
 
 def wait_for_login(driver: webdriver.Chrome, timeout: int = 180) -> None:
@@ -401,9 +403,10 @@ def wait_for_valid_cookies(
     driver: webdriver.Chrome,
     timeout: int = LOGIN_WAIT_TIMEOUT,
     poll_interval: int = 3,
+    user_email: str = "",
 ) -> str:
     deadline = time.time() + timeout
-    user_email = os.getenv("USER_EMAIL", "").strip()
+    user_email = user_email.strip()
 
     while time.time() < deadline:
         cookie_string = build_cookie_string(driver.get_cookies())
@@ -422,6 +425,7 @@ def extract_cookies_with_selenium(
     wait_for_login_flow: bool = False,
     headless: bool = False,
     use_shadow_profile: bool = False,
+    user_email: str = "",
 ) -> str:
     require_no_chrome = is_default_user_data_dir(user_data_dir) and not use_shadow_profile
     ensure_profile_not_in_use(user_data_dir, require_no_chrome)
@@ -467,7 +471,7 @@ def extract_cookies_with_selenium(
         if wait_for_login_flow and not headless:
             if "accounts.google.com" in driver.current_url:
                 print("Waiting for you to finish login in the browser...", flush=True)
-            cookie_string = wait_for_valid_cookies(driver)
+            cookie_string = wait_for_valid_cookies(driver, user_email=user_email)
             return cookie_string
 
         cookie_string = build_cookie_string(driver.get_cookies())
@@ -493,26 +497,28 @@ def refresh_cookies(
     use_shadow_profile: bool | None = None,
     use_managed_profile: bool | None = None,
     managed_profile_dir_override: str | None = None,
-) -> bool:
+    update_env: bool = True,
+    profile_config_path: Path | None = None,
+    user_email_override: str | None = None,
+) -> tuple[bool, str | None]:
     env_path = BASE_DIR / ".env"
 
     load_dotenv(env_path)
 
     current_cookie_string = os.getenv("COOKIES", "").strip()
-    user_email = os.getenv("USER_EMAIL", "").strip()
+    user_email = (user_email_override or os.getenv("USER_EMAIL", "")).strip()
 
     if not force:
         valid, reason = cookies_valid(current_cookie_string, user_email)
         if valid:
-            return False
+            return False, None
         print(f"Cookies invalid or missing ({reason}). Starting refresh...")
 
-    profile_name, user_data_dir, headless_ok, first_time = resolve_profile_settings(
+    profile_name, user_data_dir, headless_ok, first_time, config = resolve_profile_settings(
         profile_override,
         user_data_dir_override,
+        profile_config_path=profile_config_path,
     )
-
-    config = load_profile_config(PROFILE_CONFIG_PATH)
     managed_enabled = should_use_managed_profile(use_managed_profile)
     if managed_enabled:
         managed_dir = resolve_managed_profile_dir(config, managed_profile_dir_override)
@@ -521,7 +527,7 @@ def refresh_cookies(
         profile_name = "Default"
         first_time = not any(managed_dir.iterdir())
         update_profile_config(
-            PROFILE_CONFIG_PATH,
+            profile_config_path or PROFILE_CONFIG_PATH,
             {
                 "profile_name": profile_name,
                 "user_data_dir": user_data_dir,
@@ -552,6 +558,7 @@ def refresh_cookies(
                 wait_for_login_flow=wait_for_login,
                 headless=headless,
                 use_shadow_profile=shadow_profile,
+                user_email=user_email,
             )
         except Exception as exc:
             last_error = exc
@@ -562,26 +569,27 @@ def refresh_cookies(
 
         valid, reason = cookies_valid(new_cookie_string, user_email)
         if valid:
-            update_env_file(env_path, "COOKIES", new_cookie_string)
-            os.environ["COOKIES"] = new_cookie_string
-            print(f"Updated {env_path}.")
-            print("New cookies validated successfully.")
+            if update_env:
+                update_env_file(env_path, "COOKIES", new_cookie_string)
+                os.environ["COOKIES"] = new_cookie_string
+                print(f"Updated {env_path}.")
+                print("New cookies validated successfully.")
             updates = {"logged_in": True, "headless_ok": True}
-            update_profile_config(PROFILE_CONFIG_PATH, updates)
-            return True
+            update_profile_config(profile_config_path or PROFILE_CONFIG_PATH, updates)
+            return True, new_cookie_string
 
         print(f"Warning: cookie validation failed after update ({reason}).")
-        update_profile_config(PROFILE_CONFIG_PATH, {"logged_in": False})
+        update_profile_config(profile_config_path or PROFILE_CONFIG_PATH, {"logged_in": False})
         if headless:
             print("Headless cookies invalid. Retrying with browser...")
             continue
 
-        return False
+        return False, new_cookie_string
 
     if last_error:
         raise last_error
 
-    return False
+    return False, None
 
 
 def main() -> None:

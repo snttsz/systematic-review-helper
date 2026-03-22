@@ -9,15 +9,19 @@ from dotenv import load_dotenv
 import os
 from urllib.parse import urlparse, parse_qs
 
-load_dotenv()
+load_dotenv(override=True)
 
 class AuthError(Exception):
     pass
 
+
+class ConversationLimitError(AuthError):
+    pass
+
 class NotebookLMAPI:
 
-    def __init__(self):
-        raw_cookies = os.getenv("COOKIES")
+    def __init__(self, cookies: str | None = None, user_email: str | None = None):
+        raw_cookies = cookies if cookies is not None else os.getenv("COOKIES")
 
         cookies = dict(
             item.strip().split("=", 1)
@@ -28,12 +32,14 @@ class NotebookLMAPI:
         self.client = Client(cookies=cookies, timeout=30)
         self.host = "https://notebooklm.google.com"
 
+        self.user_email = user_email if user_email is not None else os.getenv("USER_EMAIL", "")
+
         self.action_token = None
         self.f_sid = None
 
     def check_success_login(self):
 
-        user_email = os.getenv("USER_EMAIL")
+        user_email = self.user_email
 
         response = self.client.get(self.host)
 
@@ -308,7 +314,14 @@ class NotebookLMAPI:
 
         response = self.client.post(self.host + path, params=params, data=data, timeout=120)
         self._raise_if_unauthorized(response)
+        if self._has_user_displayable_error(response.text):
+            self._debug_print_error(message, response.text)
+            self._dump_debug_response(response.text, notebook_id, source_id, message)
+            raise ConversationLimitError("NotebookLM conversation limit reached.")
         final_answer = self._extract_final_answer(response.text)
+        self._debug_print_answer(message, final_answer, response.text)
+        if not final_answer:
+            self._dump_debug_response(response.text, notebook_id, source_id, message)
 
         return final_answer
     
@@ -364,23 +377,130 @@ class NotebookLMAPI:
                 except json.JSONDecodeError:
                     continue
 
-                text = self._find_first_string(inner)
-                if text:
-                    last_answer = text
+                candidate = self._select_best_answer(inner)
+                if candidate:
+                    last_answer = candidate
 
-        return last_answer
+        return last_answer.strip() if isinstance(last_answer, str) else None
 
-    def _find_first_string(self, node):
+    def _select_best_answer(self, node):
+        candidates = []
+        for text in self._collect_strings(node):
+            if not isinstance(text, str):
+                continue
+            cleaned = text.strip()
+            if not cleaned:
+                continue
+            if self._looks_like_id(cleaned):
+                continue
+            candidates.append(cleaned)
+
+        if not candidates:
+            return None
+
+        # Prefer longer strings, but keep short answers like "Yes"/"No" if needed.
+        candidates.sort(key=len)
+        return candidates[-1]
+
+    def _collect_strings(self, node):
         queue = [node]
+        seen = set()
 
         while queue:
             current = queue.pop(0)
+            if id(current) in seen:
+                continue
+            seen.add(id(current))
+
             if isinstance(current, str):
-                return current
+                yield current
+                continue
+
             if isinstance(current, list):
                 queue.extend(current)
+                continue
 
-        return None
+            if isinstance(current, dict):
+                queue.extend(current.values())
+
+    def _looks_like_id(self, text: str) -> bool:
+        if re.fullmatch(r"[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}", text):
+            return True
+        if re.fullmatch(r"\d+", text):
+            return True
+        if text in {"wrb.fr", "generic", "noop"}:
+            return True
+        if len(text) <= 1:
+            return True
+        return False
+
+    def _dump_debug_response(self, response_text: str, notebook_id: str, source_id: str, message: str) -> None:
+        debug_flag = os.getenv("NOTEBOOKLM_DEBUG_RESPONSES", "").strip().lower()
+        if debug_flag not in {"1", "true", "yes"}:
+            return
+
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        debug_dir = Path(os.getenv("NOTEBOOKLM_DEBUG_DIR", "data/memory/response_dumps"))
+        debug_dir.mkdir(parents=True, exist_ok=True)
+
+        safe_message = re.sub(r"[^a-zA-Z0-9_\-]+", "_", (message or "")[:60])
+        file_name = f"{timestamp}_{safe_message}.txt"
+        file_path = debug_dir / file_name
+
+        header = (
+            f"notebook_id: {notebook_id}\n"
+            f"source_id: {source_id}\n"
+            f"question: {message}\n"
+            "-----\n"
+        )
+
+        file_path.write_text(header + (response_text or ""), encoding="utf-8")
+
+    def _debug_print_answer(self, message: str, final_answer: str | None, response_text: str) -> None:
+        debug_flag = os.getenv("NOTEBOOKLM_DEBUG_PRINT", "").strip().lower()
+        if debug_flag not in {"1", "true", "yes"}:
+            return
+
+        safe_question = (message or "").replace("\n", " ").strip()
+        if len(safe_question) > 120:
+            safe_question = safe_question[:117] + "..."
+
+        if final_answer and final_answer.strip():
+            print(f"[NotebookLM] Q: {safe_question}")
+            print(f"[NotebookLM] A: {final_answer}")
+            return
+
+        raw_preview = (response_text or "").replace("\n", " ").strip()
+        if len(raw_preview) > 300:
+            raw_preview = raw_preview[:297] + "..."
+
+        print(f"[NotebookLM] Q: {safe_question}")
+        print("[NotebookLM] A: (vazio)")
+        if raw_preview:
+            print(f"[NotebookLM] raw: {raw_preview}")
+
+    def _debug_print_error(self, message: str, response_text: str) -> None:
+        debug_flag = os.getenv("NOTEBOOKLM_DEBUG_PRINT", "").strip().lower()
+        if debug_flag not in {"1", "true", "yes"}:
+            return
+
+        safe_question = (message or "").replace("\n", " ").strip()
+        if len(safe_question) > 120:
+            safe_question = safe_question[:117] + "..."
+
+        raw_preview = (response_text or "").replace("\n", " ").strip()
+        if len(raw_preview) > 300:
+            raw_preview = raw_preview[:297] + "..."
+
+        print(f"[NotebookLM] Q: {safe_question}")
+        print("[NotebookLM] error: UserDisplayableError")
+        if raw_preview:
+            print(f"[NotebookLM] raw: {raw_preview}")
+
+    def _has_user_displayable_error(self, response_text: str) -> bool:
+        if not response_text:
+            return False
+        return "UserDisplayableError" in response_text
     
     def _get_google_reqid(self):
         return str(int(time.time() * 1000) % 1000000)
