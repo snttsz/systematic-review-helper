@@ -313,6 +313,7 @@ class NotebookLMAPI:
         }
 
         response = self.client.post(self.host + path, params=params, data=data, timeout=120)
+
         self._raise_if_unauthorized(response)
         if self._has_user_displayable_error(response.text):
             self._debug_print_error(message, response.text)
@@ -377,62 +378,23 @@ class NotebookLMAPI:
                 except json.JSONDecodeError:
                     continue
 
-                candidate = self._select_best_answer(inner)
-                if candidate:
-                    last_answer = candidate
+                text = self._find_first_string(inner)
+                if text:
+                    last_answer = text
 
-        return last_answer.strip() if isinstance(last_answer, str) else None
+        return last_answer
 
-    def _select_best_answer(self, node):
-        candidates = []
-        for text in self._collect_strings(node):
-            if not isinstance(text, str):
-                continue
-            cleaned = text.strip()
-            if not cleaned:
-                continue
-            if self._looks_like_id(cleaned):
-                continue
-            candidates.append(cleaned)
-
-        if not candidates:
-            return None
-
-        # Prefer longer strings, but keep short answers like "Yes"/"No" if needed.
-        candidates.sort(key=len)
-        return candidates[-1]
-
-    def _collect_strings(self, node):
+    def _find_first_string(self, node):
         queue = [node]
-        seen = set()
 
         while queue:
             current = queue.pop(0)
-            if id(current) in seen:
-                continue
-            seen.add(id(current))
-
             if isinstance(current, str):
-                yield current
-                continue
-
+                return current
             if isinstance(current, list):
                 queue.extend(current)
-                continue
 
-            if isinstance(current, dict):
-                queue.extend(current.values())
-
-    def _looks_like_id(self, text: str) -> bool:
-        if re.fullmatch(r"[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}", text):
-            return True
-        if re.fullmatch(r"\d+", text):
-            return True
-        if text in {"wrb.fr", "generic", "noop"}:
-            return True
-        if len(text) <= 1:
-            return True
-        return False
+        return None
 
     def _dump_debug_response(self, response_text: str, notebook_id: str, source_id: str, message: str) -> None:
         debug_flag = os.getenv("NOTEBOOKLM_DEBUG_RESPONSES", "").strip().lower()
@@ -521,5 +483,43 @@ class NotebookLMAPI:
     def _raise_if_unauthorized(self, response: httpx.Response) -> None:
         if self._is_unauthorized(response):
             raise AuthError("Authentication expired.")
+
+
+if __name__ == "__main__":
+    api = NotebookLMAPI()
+    if not api.check_success_login():
+        print("Login failed. Check COOKIES and USER_EMAIL.")
+        raise SystemExit(1)
+
+    papers_dir = Path("papers")
+    if not papers_dir.exists():
+        print("Missing papers/ directory.")
+        raise SystemExit(1)
+
+    candidates = sorted([p for p in papers_dir.iterdir() if p.is_file()])
+    if not candidates:
+        print("No files found in papers/.")
+        raise SystemExit(1)
+
+    source_path = candidates[0]
+    print(f"Using file: {source_path}")
+
+    notebook_id = api.create_notebook()
+    print(f"Notebook created: {notebook_id}")
+
+    source_id = api.pre_attachment(source_path.name, notebook_id)
+    print(f"Source pre-attached: {source_id}")
+
+    upload_id, upload_protocol = api.attachment_handshake(source_path, notebook_id, source_id)
+    api.attach_finally(source_path, upload_id, upload_protocol)
+    print("File uploaded. Waiting for processing...")
+
+    api.wait_for_processing(notebook_id)
+    print("Processing completed. Sending question...")
+
+    question = "Resumo em 2 frases."
+    response = api.send_message(notebook_id, source_id, question)
+    print("Server response (final answer):")
+    print(response)
     
 
